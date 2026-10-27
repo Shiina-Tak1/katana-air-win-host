@@ -1,0 +1,29 @@
+# ---------------------------------------------------------------- Build output
+bin/
+obj/
+.publish/
+*.user
+*.suo
+.vs/
+
+# ---------------------------------------------------------------- Local runtime data
+# Device address, storage.json, imported and exported patch files
+/data/
+/data-test/
+
+# ---------------------------------------------------------------- Frontend resources
+/web/
+
+# ---------------------------------------------------------------- Sandbox / machine-specific
+src/**/nuget.config
+.pkgs/
+.nuget-http-cache/
+
+# ---------------------------------------------------------------- Miscellaneous
+*.log
+*.tmp
+Thumbs.db
+.DS_Store
+
+# ---------------------------------------------------------------- Original documentation backup
+/backup/
