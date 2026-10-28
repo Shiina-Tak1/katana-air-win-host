@@ -5,6 +5,7 @@
     <TargetFramework>net10.0-windows10.0.19041.0</TargetFramework>
     <AssemblyName>KatanaAirWinHost</AssemblyName>
     <RootNamespace>KatanaAirWinHost</RootNamespace>
+    <Version>0.1.0</Version>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
   </PropertyGroup>
