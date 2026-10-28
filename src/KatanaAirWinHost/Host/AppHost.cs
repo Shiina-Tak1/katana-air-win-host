@@ -17,6 +17,9 @@ internal static class AppHost
 {
     private const int WebSearchDepth = 8;
 
+    /// <summary>Guards against a second shutdown from the browser-exit handler.</summary>
+    private static int _shutdownStarted;
+
     public static int Run(CliOptions options)
     {
         Dialogs.Enabled = !options.NoUi;
@@ -89,6 +92,21 @@ internal static class AppHost
                 ? null
                 : BrowserLauncher.Launch($"http://localhost:{server.Port}/index.html", options.Dev);
 
+            // Closing the Edge window ends the host. A process that exits within 2 s handed the URL
+            // to an existing Edge instance and is not the window process.
+            if (browser is not null)
+            {
+                DateTime launchedAt = DateTime.UtcNow;
+                browser.EnableRaisingEvents = true;
+                browser.Exited += (_, _) =>
+                {
+                    if (Volatile.Read(ref _shutdownStarted) != 0) return;
+                    if ((DateTime.UtcNow - launchedAt).TotalSeconds < 2) return;
+
+                    Shutdown(server, bridge, dialogs, browser);
+                };
+            }
+
             // The browser window is not the file dialog owner: a foreign-process owner makes
             // GetOpenFileNameW fail with CDERR_DIALOGFAILURE (0xFFFF). See FileDialogBridge.OwnerWindow().
 
@@ -98,26 +116,34 @@ internal static class AppHost
             WaitForShutdown();
 
             // Close the window opened by this process on Ctrl+C exit.
-            BrowserLauncher.Close(browser);
+            CloseBrowser(browser);
         }
 
         return 0;
     }
 
     /// <summary>
-    /// $$app_exit shutdown: close the Edge window, dispose the bridge and dialogs, stop HTTP, exit 0.
-    /// Environment.Exit is the exit path; WinRT event sources and background threads are still
-    /// running, and each Dispose is guarded separately.
+    /// $$app_exit or browser-window-close shutdown: close the Edge window, dispose the bridge and
+    /// dialogs, stop HTTP, exit 0. Environment.Exit is the exit path; WinRT event sources and
+    /// background threads are still running, and each Dispose is guarded separately.
     /// </summary>
     private static void Shutdown(HttpServer server, NativeBridge bridge, FileDialogBridge dialogs, Process? browser)
     {
-        BrowserLauncher.Close(browser);
+        if (Interlocked.Exchange(ref _shutdownStarted, 1) != 0) return;
+
+        CloseBrowser(browser);
 
         try { bridge.Dispose(); } catch (Exception ex) { Console.Error.WriteLine($"[exit] failed to dispose bridge: {ex.Message}"); }
         try { dialogs.Dispose(); } catch (Exception ex) { Console.Error.WriteLine($"[exit] failed to release dialog thread: {ex.Message}"); }
         try { server.Dispose(); } catch (Exception ex) { Console.Error.WriteLine($"[exit] failed to stop HTTP service: {ex.Message}"); }
 
         Environment.Exit(0);
+    }
+
+    private static void CloseBrowser(Process? browser)
+    {
+        if (browser is null || browser.HasExited) return;
+        BrowserLauncher.Close(browser);
     }
 
     // ------------------------------------------------------------------ path resolution
