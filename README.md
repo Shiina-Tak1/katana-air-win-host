@@ -3,7 +3,10 @@
 [![.NET 10](https://img.shields.io/badge/.NET-10-512BD4?logo=dotnet&logoColor=white)](https://dotnet.microsoft.com/)
 [![MIT License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 
-**An unofficial Windows host for the BOSS KATANA-AIR controller frontend.**
+**An unofficial Windows host for the BOSS KATANA-AIR / KATANA-AIR EX controller frontend.**
+
+> [!NOTE]
+> The KATANA-AIR and KATANA-AIR EX use the same controller app, so this might work with the EX too. I don't have one to test, though, so no guarantees! 🤔
 
 > [!WARNING]
 > This is an unofficial community project. It is not affiliated with, endorsed by, or supported by Roland Corporation or BOSS. It does not include the proprietary frontend resources.
@@ -38,7 +41,7 @@ The host injects `head.js` and `tail.js` into the HTML served to the browser. Th
 - A Bluetooth LE adapter and the Windows Bluetooth stack.
 - A BOSS KATANA-AIR amplifier.
 - The controller frontend resources from the official Android application.
-- The .NET 10 SDK to build, or the .NET 10 Desktop Runtime for a framework-dependent build.
+- The .NET 10 SDK to build, or the .NET 10 Runtime for a framework-dependent build.
 - Microsoft Edge.
 
 ## Official Frontend Resources

@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.Text.Json;
 using KatanaAirWinHost.Ble;
+using KatanaAirWinHost.Model;
 using Windows.Devices.Bluetooth;
 
 namespace KatanaAirWinHost.Bridge;
@@ -8,14 +9,8 @@ namespace KatanaAirWinHost.Bridge;
 /// <summary><c>$$</c> command dispatch.</summary>
 internal sealed class NativeBridge : IDisposable
 {
-    private const string DeviceName = "KATANA-AIR MIDI";
-
-    // IN and OUT share one match key; the frontend resolves input endpoints by the output
-    // endpoint's MIDIEndpointIndexKey. Only the display name differs.
-    private const string EndpointKey = "KATANA-AIR-BLE";
-    private const string EndpointUid = "KATANA-AIR-BLE";
-
     private const int CommandLogLimit = 200;
+    private readonly ModelProfile _model;
 
     /// <summary>$$ commands handled by the host; listed by /__debug and in HOST-INTERFACES.md.</summary>
     public static readonly string[] SupportedCommands =
@@ -76,7 +71,8 @@ internal sealed class NativeBridge : IDisposable
         BtxBridge btx,
         EventQueue events,
         StorageStore storage,
-        string? addressOverride)
+        string? addressOverride,
+        ModelProfile model)
     {
         _files = files;
         _appFiles = appFiles;
@@ -85,6 +81,7 @@ internal sealed class NativeBridge : IDisposable
         _btx = btx;
         _events = events;
         _storage = storage;
+        _model = model;
 
         // Address precedence: --addr over ble.address in storage.json; --addr is not written back.
         _bleAddress = ParseAddress(addressOverride) ?? storage.GetBleAddress();
@@ -302,11 +299,11 @@ internal sealed class NativeBridge : IDisposable
 
     // ------------------------------------------------------------------ MIDI endpoint enumeration
 
-    private static string EndpointsJson(string direction)
+    private string EndpointsJson(string direction)
     {
-        string name = $"{DeviceName} ({(direction == "IN" ? "Bluetooth MIDI IN" : "Bluetooth MIDI OUT")})";
-        return $"[{{\"MIDIDeviceNameKey\":{Q(name)},\"MIDIEndpointUIDKey\":{Q(EndpointUid)}," +
-               $"\"MIDIEndpointIndexKey\":{Q(EndpointKey)},\"MIDIEntityNameKey\":{Q(name)}}}]";
+        string name = $"{_model.BleDeviceName} ({(direction == "IN" ? "Bluetooth MIDI IN" : "Bluetooth MIDI OUT")})";
+        return $"[{{\"MIDIDeviceNameKey\":{Q(name)},\"MIDIEndpointUIDKey\":{Q(_model.EndpointUid)}," +
+               $"\"MIDIEndpointIndexKey\":{Q(_model.EndpointKey)},\"MIDIEntityNameKey\":{Q(name)}}}]";
     }
 
     // Event string: app\fonScanned\f<JSON string>; Web/inject/tail.js converts it to an array.
@@ -376,9 +373,9 @@ internal sealed class NativeBridge : IDisposable
                 if (_bleAddress == 0) _bleAddress = FindAddress();
                 if (_bleAddress == 0)
                 {
-                    _lastError = "no speaker address (scan found no KATANA-AIR)";
+                    _lastError = $"no device address (scan found no {_model.DisplayName})";
                     Console.Error.WriteLine("[ble] no device address (scan found nothing)");
-                    _events.Push("midi", "connectfailed", DeviceName);
+                    _events.Push("midi", "connectfailed", _model.BleDeviceName);
                     return;
                 }
 
@@ -388,12 +385,12 @@ internal sealed class NativeBridge : IDisposable
                 {
                     _lastError = "BluetoothLEDevice.FromBluetoothAddressAsync returned null";
                     Console.Error.WriteLine("[ble] FromBluetoothAddressAsync -> null");
-                    _events.Push("midi", "connectfailed", DeviceName);
+                    _events.Push("midi", "connectfailed", _model.BleDeviceName);
                     return;
                 }
 
                 // Blocking wait on the calling thread; the WinRT continuation stays on this thread.
-                _ble = BleMidiConnection.ConnectAsync(device, device.DeviceId, OnMidiData, true)
+                _ble = BleMidiConnection.ConnectAsync(device, device.DeviceId, OnMidiData, true, _model)
                            .GetAwaiter().GetResult();
 
                 _lastError = null;
@@ -405,7 +402,7 @@ internal sealed class NativeBridge : IDisposable
                 _lastError = ex.Message;
                 Console.Error.WriteLine($"[ble] connect failed: {ex.Message}");
                 _ble = null;
-                _events.Push("midi", "connectfailed", DeviceName);
+                _events.Push("midi", "connectfailed", _model.BleDeviceName);
             }
         }
     }
@@ -423,7 +420,7 @@ internal sealed class NativeBridge : IDisposable
             watcher.Received += (_, e) =>
             {
                 string n = e.Advertisement.LocalName;
-                if (!string.IsNullOrEmpty(n) && n.StartsWith("KATANA-AIR", StringComparison.OrdinalIgnoreCase))
+                if (!string.IsNullOrEmpty(n) && n.StartsWith(_model.BleNamePrefix, StringComparison.OrdinalIgnoreCase))
                     found[e.BluetoothAddress] = n;
             };
 
@@ -457,7 +454,7 @@ internal sealed class NativeBridge : IDisposable
         return 0;
     }
 
-    /// <summary>Finds KATANA-AIR among paired devices by name; returns 0 if not found.</summary>
+    /// <summary>Finds the model's device among paired devices by name; returns 0 if not found.</summary>
     private ulong FindPairedAddress()
     {
         try
@@ -469,7 +466,7 @@ internal sealed class NativeBridge : IDisposable
             foreach (var info in devices)
             {
                 string name = info.Name ?? "";
-                if (!name.StartsWith("KATANA-AIR", StringComparison.OrdinalIgnoreCase)) continue;
+                if (!name.StartsWith(_model.BleNamePrefix, StringComparison.OrdinalIgnoreCase)) continue;
 
                 try
                 {

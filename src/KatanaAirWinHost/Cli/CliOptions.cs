@@ -1,4 +1,5 @@
 using System.Globalization;
+using KatanaAirWinHost.Model;
 
 namespace KatanaAirWinHost.Cli;
 
@@ -30,6 +31,9 @@ internal sealed class CliOptions
     /// <summary>--addr &lt;HEX12&gt;: known Bluetooth address (skips scanning).</summary>
     public string? Address { get; private set; }
 
+    /// <summary>--model &lt;id&gt;: model profile; see ModelProfiles.</summary>
+    public string ModelId { get; private set; } = ModelProfiles.Default.Id;
+
     public static string HelpText =>
         """
         KatanaAirWinHost - Windows host for BOSS TONE STUDIO for KATANA-AIR
@@ -44,6 +48,7 @@ internal sealed class CliOptions
           --no-browser            start the service only, do not open a browser
           --port <n>              fixed listen port (default: a free port assigned by the system)
           --web-root <dir>        frontend resource directory (index.html required)
+          --model <id>            model profile: katana-air (default), katana-air-ex
 
         Diagnostic commands (only one per run):
           --ble-scan [--addr <HEX12>]    scan and connect to the BLE-MIDI link, print received data
@@ -119,6 +124,20 @@ internal sealed class CliOptions
                     }
 
                     options.WebRoot = dir;
+                    break;
+                }
+
+                case "--model":
+                {
+                    if (!TryTakeValue(args, ref i, "--model", out string id, out error)) return false;
+                    ModelProfile? profile = ModelProfiles.Find(id.Trim());
+                    if (profile is null)
+                    {
+                        error = $"unknown model '{id}'; available: {string.Join(", ", ModelProfiles.All.Select(p => p.Id))}";
+                        return false;
+                    }
+
+                    options.ModelId = profile.Id;
                     break;
                 }
 

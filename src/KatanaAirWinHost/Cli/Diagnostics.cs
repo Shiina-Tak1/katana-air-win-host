@@ -4,6 +4,7 @@ using System.Globalization;
 using System.Text;
 using KatanaAirWinHost.Ble;
 using KatanaAirWinHost.Bridge;
+using KatanaAirWinHost.Model;
 using Windows.Devices.Bluetooth;
 using Windows.Devices.Bluetooth.Advertisement;
 using Windows.Devices.Enumeration;
@@ -16,14 +17,15 @@ internal static class Diagnostics
 {
     public static async Task<int> RunAsync(CliOptions options)
     {
+        ModelProfile model = ModelProfiles.Find(options.ModelId) ?? ModelProfiles.Default;
         switch (options.Mode)
         {
             case CliOptions.ModeScan:
-                return await BleScanAsync(options);
+                return await BleScanAsync(options, model);
             case CliOptions.ModePair:
-                return await BlePairAsync(options);
+                return await BlePairAsync(options, model);
             case CliOptions.ModeDiag:
-                return await BleDiagAsync();
+                return await BleDiagAsync(model);
             case CliOptions.ModeListWinMmMidi:
                 return ListWinMmMidi();
             case CliOptions.ModeListWinRtMidi:
@@ -36,7 +38,7 @@ internal static class Diagnostics
 
     // ------------------------------------------------------------------ --ble-scan
 
-    private static async Task<int> BleScanAsync(CliOptions options)
+    private static async Task<int> BleScanAsync(CliOptions options, ModelProfile model)
     {
         // A connected device stops advertising; --addr skips the scan.
         ulong knownAddress = ParseAddress(options.Address);
@@ -94,17 +96,17 @@ internal static class Diagnostics
         {
             Console.WriteLine($"using known address {knownAddress:X12} (skipping scan result match)");
             address = knownAddress;
-            label = "KATANA-AIR MIDI (by addr)";
+            label = $"{model.BleDeviceName} (by addr)";
         }
         else
         {
             var hit = found.FirstOrDefault(kv =>
-                kv.Value.Name.StartsWith("KATANA-AIR", StringComparison.OrdinalIgnoreCase));
+                kv.Value.Name.StartsWith(model.BleNamePrefix, StringComparison.OrdinalIgnoreCase));
 
             if (hit.Value.Name is null)
             {
                 Console.WriteLine();
-                Console.WriteLine("No KATANA-AIR is advertising. --ble-scan --addr FBB7D06DC373 skips the scan.");
+                Console.WriteLine($"No {model.DisplayName} is advertising. --ble-scan --addr FBB7D06DC373 skips the scan.");
                 return 2;
             }
 
@@ -131,7 +133,7 @@ internal static class Diagnostics
 
         try
         {
-            var conn = await BleMidiConnection.ConnectAsync(device, device.DeviceId, OnMidi, reuseDevice: true);
+            var conn = await BleMidiConnection.ConnectAsync(device, device.DeviceId, OnMidi, reuseDevice: true, model);
             await PrintLinkCheckAsync(conn, received);
             conn.Dispose();
         }
@@ -141,7 +143,7 @@ internal static class Diagnostics
 
             // Unpaired links cannot connect; pairing runs while the device still advertises,
             // then the connection is retried.
-            await TryPairAndRetryAsync(device, address, OnMidi, received);
+            await TryPairAndRetryAsync(device, address, OnMidi, received, model);
         }
 
         Console.WriteLine("done");
@@ -171,7 +173,8 @@ internal static class Diagnostics
         BluetoothLEDevice device,
         ulong address,
         Action<byte[]> onMidi,
-        List<string> received)
+        List<string> received,
+        ModelProfile model)
     {
         var pairing = device.DeviceInformation?.Pairing;
         if (pairing is null) return;
@@ -194,7 +197,7 @@ internal static class Diagnostics
             var reopened = await BluetoothLEDevice.FromBluetoothAddressAsync(address);
             if (reopened is null) return;
 
-            var conn = await BleMidiConnection.ConnectAsync(reopened, reopened.DeviceId, onMidi, reuseDevice: true);
+            var conn = await BleMidiConnection.ConnectAsync(reopened, reopened.DeviceId, onMidi, reuseDevice: true, model);
             await PrintLinkCheckAsync(conn, received);
             conn.Dispose();
         }
@@ -206,7 +209,7 @@ internal static class Diagnostics
 
     // ------------------------------------------------------------------ --ble-pair
 
-    private static async Task<int> BlePairAsync(CliOptions options)
+    private static async Task<int> BlePairAsync(CliOptions options, ModelProfile model)
     {
         // Active scanning sends SCAN_REQ and ends the speaker's pairing window almost immediately;
         // passive scanning is used instead. --addr touches the device only once.
@@ -226,7 +229,7 @@ internal static class Diagnostics
             {
                 string name = e.Advertisement.LocalName;
                 if (!string.IsNullOrEmpty(name) &&
-                    name.StartsWith("KATANA-AIR", StringComparison.OrdinalIgnoreCase))
+                    name.StartsWith(model.BleNamePrefix, StringComparison.OrdinalIgnoreCase))
                     found[e.BluetoothAddress] = name;
             };
 
@@ -326,7 +329,7 @@ internal static class Diagnostics
 
     // ------------------------------------------------------------------ --ble-diag
 
-    private static async Task<int> BleDiagAsync()
+    private static async Task<int> BleDiagAsync(ModelProfile model)
     {
         var stopwatch = Stopwatch.StartNew();
 
@@ -363,7 +366,7 @@ internal static class Diagnostics
                 {
                     Console.WriteLine($"      svc {service.Uuid}");
 
-                    if (service.Uuid != BleMidiFraming.MidiServiceUuid) continue;
+                    if (service.Uuid != model.MidiServiceUuid) continue;
 
                     var characteristics = await service.GetCharacteristicsAsync(BluetoothCacheMode.Uncached);
                     Console.WriteLine($"        >> BLE-MIDI service, chars={characteristics.Status} {characteristics.Characteristics.Count}");

@@ -4,6 +4,7 @@ using KatanaAirWinHost.Ble;
 using KatanaAirWinHost.Bridge;
 using KatanaAirWinHost.Cli;
 using KatanaAirWinHost.Http;
+using KatanaAirWinHost.Model;
 
 namespace KatanaAirWinHost.Host;
 
@@ -18,6 +19,13 @@ internal static class AppHost
 
     public static int Run(CliOptions options)
     {
+        ModelProfile? model = ModelProfiles.Find(options.ModelId);
+        if (model is null)
+        {
+            Console.Error.WriteLine($"unknown model '{options.ModelId}'");
+            return 2;
+        }
+
         string? webRoot = ResolveWebRoot(options.WebRoot);
         if (webRoot is null) return 1;
 
@@ -33,7 +41,7 @@ internal static class AppHost
         var appFiles = new AppFileBridge(dialogs, events, files);
         var yt = new YtPlayerBridge(events);
         var btx = new BtxBridge(events);
-        using var bridge = new NativeBridge(files, appFiles, dialogs, yt, btx, events, storage, options.Address);
+        using var bridge = new NativeBridge(files, appFiles, dialogs, yt, btx, events, storage, options.Address, model);
 
         HttpServer server;
         try
@@ -50,7 +58,7 @@ internal static class AppHost
 
         using (server)
         {
-            PrintBanner(webRoot, dataDir, server.Port);
+            PrintBanner(webRoot, dataDir, server.Port, model);
 
             // --no-browser: no browser process; browser stays null.
             Process? browser = options.NoBrowser
@@ -153,9 +161,9 @@ internal static class AppHost
 
     // ------------------------------------------------------------------ banner / lifecycle
 
-    private static void PrintBanner(string webRoot, string dataDir, int port)
+    private static void PrintBanner(string webRoot, string dataDir, int port, ModelProfile model)
     {
-        Console.WriteLine("KatanaAirWinHost - Windows host for BOSS TONE STUDIO for KATANA-AIR");
+        Console.WriteLine($"KatanaAirWinHost - Windows host for {model.FrontendName}");
         Console.WriteLine($"  Open  : http://localhost:{port}/");
         Console.WriteLine($"  Debug : http://localhost:{port}/__debug   (commands / events / BLE status)");
         Console.WriteLine($"  Web   : {webRoot}");

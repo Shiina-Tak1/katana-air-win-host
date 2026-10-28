@@ -1,12 +1,13 @@
 using Windows.Devices.Bluetooth;
 using Windows.Devices.Bluetooth.GenericAttributeProfile;
 using Windows.Storage.Streams;
+using KatanaAirWinHost.Model;
 
 namespace KatanaAirWinHost.Ble;
 
 /// <summary>
-/// GATT connection to the KATANA-AIR BLE-MIDI characteristic. MaintainConnection is set to true;
-/// retries are limited to 2 (about 7.7 s per GATT timeout) on a new BluetoothLEDevice; writes use
+/// GATT connection to a BLE-MIDI characteristic. MaintainConnection is set to true; retries are
+/// limited to 2 (about 7.7 s per GATT timeout) on a new BluetoothLEDevice; writes use
 /// WriteWithoutResponse. An unencrypted CCCD write returns 0x8065000F.
 /// </summary>
 internal sealed class BleMidiConnection : IDisposable
@@ -33,14 +34,14 @@ internal sealed class BleMidiConnection : IDisposable
         _characteristic.ValueChanged += OnValueChanged;
     }
 
-    public static Task<BleMidiConnection> ConnectAsync(BluetoothLEDevice device, Action<byte[]> onData)
-        => ConnectAsync(device, device.DeviceId, onData, reuseDevice: true);
+    public static Task<BleMidiConnection> ConnectAsync(BluetoothLEDevice device, Action<byte[]> onData, ModelProfile model)
+        => ConnectAsync(device, device.DeviceId, onData, reuseDevice: true, model);
 
     /// <summary>
     /// Connects with up to 2 attempts, the second on a reopened BluetoothLEDevice.
     /// Requires GetAwaiter().GetResult() on the caller's own thread.
     /// </summary>
-    public static async Task<BleMidiConnection> ConnectAsync(BluetoothLEDevice device, string deviceId, Action<byte[]> onData, bool reuseDevice)
+    public static async Task<BleMidiConnection> ConnectAsync(BluetoothLEDevice device, string deviceId, Action<byte[]> onData, bool reuseDevice, ModelProfile model)
     {
         GattDeviceServicesResult? services = null;
         BluetoothLEDevice current = device;
@@ -94,7 +95,7 @@ internal sealed class BleMidiConnection : IDisposable
         if (services is null || services.Status != GattCommunicationStatus.Success)
             throw new InvalidOperationException($"GATT services failed: {services?.Status}");
 
-        var service = services.Services.FirstOrDefault(s => s.Uuid == BleMidiFraming.MidiServiceUuid)
+        var service = services.Services.FirstOrDefault(s => s.Uuid == model.MidiServiceUuid)
                       ?? throw new InvalidOperationException("BLE-MIDI service not found");
 
         // Request access explicitly; the service may be held by Windows' Bluetooth-MIDI stack.
@@ -126,7 +127,7 @@ internal sealed class BleMidiConnection : IDisposable
                     var s2 = await reopened.GetGattServicesAsync(BluetoothCacheMode.Uncached);
                     if (s2.Status == GattCommunicationStatus.Success)
                     {
-                        var svc2 = s2.Services.FirstOrDefault(s => s.Uuid == BleMidiFraming.MidiServiceUuid);
+                        var svc2 = s2.Services.FirstOrDefault(s => s.Uuid == model.MidiServiceUuid);
                         if (svc2 is not null)
                         {
                             try { current.Dispose(); } catch { }
@@ -142,7 +143,7 @@ internal sealed class BleMidiConnection : IDisposable
         if (chars is null || chars.Status != GattCommunicationStatus.Success)
             throw new InvalidOperationException($"GATT characteristics failed: {chars?.Status}");
 
-        var ch = chars.Characteristics.FirstOrDefault(c => c.Uuid == BleMidiFraming.MidiCharacteristicUuid)
+        var ch = chars.Characteristics.FirstOrDefault(c => c.Uuid == model.MidiCharacteristicUuid)
                  ?? throw new InvalidOperationException("BLE-MIDI characteristic not found");
 
         bool notify = false;

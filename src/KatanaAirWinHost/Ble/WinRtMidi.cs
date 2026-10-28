@@ -6,9 +6,9 @@ namespace KatanaAirWinHost.Ble;
 internal sealed record WinRtMidiDevice(string Id, string Name);
 
 /// <summary>
-/// Windows MIDI Services (WinRT) device enumeration. KATANA-AIR BLE-MIDI appears here as
-/// "KATANA-AIR MIDI (Bluetooth MIDI IN/OUT)". Not called at startup: GetDeviceSelector() lets the
-/// Windows Bluetooth stack claim the speaker, after which direct GATT access fails with Unreachable.
+/// Windows MIDI Services (WinRT) device enumeration. BLE-MIDI devices appear here as
+/// "&lt;name&gt; (Bluetooth MIDI IN/OUT)". Not called at startup: GetDeviceSelector() lets the
+/// Windows Bluetooth stack claim the amplifier, after which direct GATT access fails with Unreachable.
 /// </summary>
 internal static class WinRtMidi
 {

@@ -8,9 +8,6 @@ namespace KatanaAirWinHost.Ble;
 /// </summary>
 internal static class BleMidiFraming
 {
-    public static readonly Guid MidiServiceUuid = Guid.Parse("03B80E5A-EDE8-4B33-A751-6CE34EC4C700");
-    public static readonly Guid MidiCharacteristicUuid = Guid.Parse("7772E5DB-3868-4112-A1A9-F2669D106BF3");
-
     private static int _timestamp;
 
     /// <summary>Wraps a complete MIDI message in a BLE-MIDI frame.</summary>

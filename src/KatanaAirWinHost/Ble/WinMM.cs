@@ -3,8 +3,8 @@ using System.Runtime.InteropServices;
 namespace KatanaAirWinHost.Ble;
 
 /// <summary>
-/// WinMM (winmm.dll) MIDI device enumeration. USB MIDI endpoints appear here; KATANA-AIR
-/// BLE-MIDI is exposed only through Windows MIDI Services.
+/// WinMM (winmm.dll) MIDI device enumeration. USB MIDI endpoints appear here; BLE-MIDI devices
+/// do not.
 /// </summary>
 internal static class WinMM
 {

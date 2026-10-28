@@ -16,7 +16,7 @@
 | `$$` names in `SupportedCommands` | 55 (50 fixed names + 5 `$$btx_*`)         | `Bridge/NativeBridge.cs`                              |
 | Prefix-forwarded command families | 2 (`$$ytplayer_*`, `$$btx_*`)             | `Bridge/YtPlayerBridge.cs`, `Bridge/BtxBridge.cs`     |
 | Event names                       | 16                                        | §4                                                    |
-| Command-line options              | 11                                        | `Cli/CliOptions.cs`                                   |
+| Command-line options              | 12                                        | `Cli/CliOptions.cs`                                   |
 | Environment variables             | 3                                         | `Host/AppHost.cs`, `Bridge/CloudProxy.cs`             |
 | Exit codes                        | 0, 1, 2                                   | `Program.cs`, `Host/AppHost.cs`, `Cli/Diagnostics.cs` |
 | Storage keys written by the host  | 3 (`""`, `ble.address`, `dialog.lastdir`) | `Bridge/StorageStore.cs`                              |
@@ -234,6 +234,7 @@ GET http://localhost:<port>/$$<name>?<arg1>,<arg2>
 | `--no-browser`       | Start the server only; no browser is launched and `$$app_exit` has no window to close                                                           |
 | `--port <n>`         | Fixed listen port, 1–65535; default is a system-assigned free port                                                                              |
 | `--web-root <dir>`   | Frontend directory; must contain `index.html` directly                                                                                          |
+| `--model <id>`       | Model profile: `katana-air` (default) or `katana-air-ex`                                                                                        |
 | `--addr <HEX>`       | Bluetooth address: diagnostic commands use it instead of scanning; in app mode it overrides `storage.json` for this run and is not written back |
 | `--ble-scan`         | Scan, connect, read the characteristic and send a Device Inquiry (§6.2)                                                                         |
 | `--ble-pair`         | Pair with the amplifier (§6.2)                                                                                                                  |
@@ -249,6 +250,7 @@ GET http://localhost:<port>/$$<name>?<arg1>,<arg2>
 | `--addr` value                                | 1–16 hex digits, optional `0x` prefix, case-insensitive, stored uppercase                                                                                                       |
 | `--port` value                                | Integer 1–65535                                                                                                                                                                 |
 | `--web-root` value                            | Non-empty                                                                                                                                                                       |
+| `--model` value                               | `katana-air`, `katana-air-ex`                                                                                                                                                   |
 | Frontend directory resolution                 | `--web-root`, `KAWH_WEB_ROOT`, then the first directory within eight levels above the executable that contains `web/index.html`; the directory must contain `index.html` itself |
 | Startup output                                | Interface URL, `/__debug` URL, frontend directory, data directory, WinMM input ports                                                                                            |
 | Unknown option, extra argument, missing value | Parse error                                                                                                                                                                     |
@@ -267,7 +269,7 @@ GET http://localhost:<port>/$$<name>?<arg1>,<arg2>
 | ---- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | 0    | `--help`; normal shutdown (Ctrl+C or `$$app_exit`); a diagnostic command that completed successfully                                                                                                                                              |
 | 1    | Frontend directory not found, or it has no `index.html`; listen port unavailable; `--ble-scan` when the device cannot be opened; `--ble-pair` when every attempt failed. The reason is printed to stderr                                          |
-| 2    | Command-line parse error (message and help text go to stderr); `--ble-scan` when no `KATANA-AIR` device was found; `--ble-pair` when no device was found, it could not be opened, or no pairing information is available; unknown diagnostic mode |
+| 2    | Command-line parse error, including unknown model (message and help text go to stderr); `--ble-scan` when no device of the selected model was found; `--ble-pair` when no device was found, it could not be opened, or no pairing information is available; unknown diagnostic mode |
 
 ## 6. Diagnostics
 
@@ -310,6 +312,9 @@ GET http://localhost:<port>/$$<name>?<arg1>,<arg2>
 | Name prefix used for discovery       | `KATANA-AIR` (case-insensitive)        |
 | MIDI service                         | `03B80E5A-EDE8-4B33-A751-6CE34EC4C700` |
 | MIDI characteristic (write + notify) | `7772E5DB-3868-4112-A1A9-F2669D106BF3` |
+
+Model profiles: `katana-air` (default) and `katana-air-ex`. The KATANA-AIR EX profile reuses the
+KATANA-AIR values; it has not been verified on KATANA-AIR EX hardware.
 
 ### 7.2 Frame layout and timestamps
 
