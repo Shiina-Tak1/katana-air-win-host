@@ -4,8 +4,8 @@ namespace KatanaAirWinHost.Host;
 
 /// <summary>
 /// Opens the interface in Edge: an application window (<c>--app=&lt;url&gt;</c>) by default, a normal
-/// window with <c>--dev</c>. The launched process is closed by AppHost on <c>$$app_exit</c> and uses a
-/// dedicated --user-data-dir.
+/// window with <c>--dev</c>. Without Edge the default browser is opened instead. The launched
+/// Edge process is closed by AppHost on <c>$$app_exit</c> and uses a dedicated --user-data-dir.
 /// </summary>
 internal static class BrowserLauncher
 {
@@ -14,8 +14,9 @@ internal static class BrowserLauncher
         string? edge = FindEdge();
         if (edge is null)
         {
-            Console.WriteLine("Microsoft Edge not found. Open the following URL manually in a browser:");
-            Console.WriteLine("  " + url);
+            Console.Error.WriteLine("[browser] Microsoft Edge not found; opening the default browser.");
+            Console.Error.WriteLine("[browser] " + url);
+            OpenDefault(url);
             return null;
         }
 
@@ -37,10 +38,23 @@ internal static class BrowserLauncher
         }
         catch (Exception ex)
         {
-            Console.WriteLine($"Failed to start Edge: {ex.Message}");
-            Console.WriteLine("Open the following URL manually in a browser:");
-            Console.WriteLine("  " + url);
+            Console.Error.WriteLine($"[browser] failed to start Edge: {ex.Message}");
+            Console.Error.WriteLine("[browser] open this URL manually: " + url);
             return null;
+        }
+    }
+
+    /// <summary>Opens the URL in the default browser through the shell.</summary>
+    private static void OpenDefault(string url)
+    {
+        try
+        {
+            Process.Start(new ProcessStartInfo(url) { UseShellExecute = true });
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"[browser] failed to open the default browser: {ex.Message}");
+            Console.Error.WriteLine("[browser] open this URL manually: " + url);
         }
     }
 

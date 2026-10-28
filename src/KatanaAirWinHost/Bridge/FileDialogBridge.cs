@@ -78,11 +78,33 @@ internal sealed class FileDialogBridge : IDisposable
         Schedule(() =>
         {
             string? result = null;
-            try { result = AskFolder(); }
+            try { result = AskFolder(null, "Select export folder"); }
             catch (Exception ex) { Console.Error.WriteLine($"[dialog] folder picker failed: {ex.Message}"); }
             if (result is not null) Remember(result);
             onResult(result);
         });
+    }
+
+    /// <summary>
+    /// Shows the folder picker on the STA thread and waits for the result; null on cancel or when the
+    /// dialog thread is unavailable.
+    /// </summary>
+    public string? PickFolder(string? initial)
+    {
+        string? result = null;
+        using var done = new ManualResetEventSlim(false);
+
+        bool scheduled = Schedule(() =>
+        {
+            try { result = AskFolder(initial, "Select web folder"); }
+            catch (Exception ex) { Console.Error.WriteLine($"[dialog] folder picker failed: {ex.Message}"); }
+            finally { done.Set(); }
+        });
+
+        if (!scheduled) return null;
+
+        done.Wait();
+        return result;
     }
 
     /// <summary>Parses a filter JSON array such as ["kat"] into extensions; a bare string is accepted.</summary>
@@ -133,15 +155,17 @@ internal sealed class FileDialogBridge : IDisposable
         }
     }
 
-    private void Schedule(Action action)
+    private bool Schedule(Action action)
     {
-        if (_disposed) return;
+        if (_disposed) return false;
         try
         {
             _queue.Add(action);
+            return true;
         }
         catch (InvalidOperationException)
         {
+            return false;
         }
     }
 
@@ -250,10 +274,10 @@ internal sealed class FileDialogBridge : IDisposable
         }
     }
 
-    private string? AskFolder()
+    private string? AskFolder(string? initial, string title)
     {
         IntPtr root = IntPtr.Zero;
-        string startDir = DefaultDirectory();
+        string startDir = Directory.Exists(initial) ? initial! : DefaultDirectory();
         if (SHParseDisplayName(startDir, IntPtr.Zero, out IntPtr parsed, 0, out _) == 0)
             root = parsed;
 
@@ -265,7 +289,7 @@ internal sealed class FileDialogBridge : IDisposable
                 hwndOwner = OwnerWindow(),
                 pidlRoot = root,
                 pszDisplayName = displayName,
-                lpszTitle = "Select export folder",
+                lpszTitle = title,
                 ulFlags = BIF_RETURNONLYFSDIRS | BIF_NEWDIALOGSTYLE | BIF_EDITBOX,
                 lpfn = IntPtr.Zero,
                 lParam = IntPtr.Zero,

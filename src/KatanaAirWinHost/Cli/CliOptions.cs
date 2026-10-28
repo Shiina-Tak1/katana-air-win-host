@@ -31,8 +31,17 @@ internal sealed class CliOptions
     /// <summary>--addr &lt;HEX12&gt;: known Bluetooth address (skips scanning).</summary>
     public string? Address { get; private set; }
 
-    /// <summary>--model &lt;id&gt;: model profile; see ModelProfiles.</summary>
-    public string ModelId { get; private set; } = ModelProfiles.Default.Id;
+    /// <summary>--model &lt;id&gt;: model profile; null means the saved value or the default.</summary>
+    public string? ModelId { get; private set; }
+
+    /// <summary>--ble-name &lt;prefix&gt;: overrides the model's BLE name prefix.</summary>
+    public string? BleNamePrefix { get; private set; }
+
+    /// <summary>--reset: deletes data\host.json before startup.</summary>
+    public bool Reset { get; private set; }
+
+    /// <summary>--no-ui or KAWH_NO_UI=1: no message boxes; errors go to stderr only.</summary>
+    public bool NoUi { get; private set; }
 
     public static string HelpText =>
         """
@@ -46,9 +55,12 @@ internal sealed class CliOptions
         Startup options:
           --dev                   open a normal Edge window (address bar, F12 available)
           --no-browser            start the service only, do not open a browser
+          --no-ui                 no message boxes; startup errors go to stderr only
           --port <n>              fixed listen port (default: a free port assigned by the system)
           --web-root <dir>        frontend resource directory (index.html required)
           --model <id>            model profile: katana-air (default), katana-air-ex
+          --ble-name <prefix>     BLE name prefix used for discovery (default: from the model)
+          --reset                 delete data\host.json before startup
 
         Diagnostic commands (only one per run):
           --ble-scan [--addr <HEX12>]    scan and connect to the BLE-MIDI link, print received data
@@ -60,13 +72,15 @@ internal sealed class CliOptions
         Other:
           --addr <HEX12>          explicit Bluetooth address
                                   - with a diagnostic command: the scan is skipped
-                                  - with a startup mode: overrides ble.address from storage.json
-                                    for this run only; the value is not written back
+                                  - with a startup mode: overrides host.json deviceAddress and
+                                    ble.address from storage.json for this run only; the value
+                                    is not written back
           --help, -h, /?          show this help
 
         Environment variables:
           KAWH_WEB_ROOT           frontend resource directory (same as --web-root, lower priority)
           KAWH_DATA_DIR           data directory (default: exe directory\data)
+          KAWH_NO_UI=1            same as --no-ui
           KAWH_PROXY_OFF=1        disable the /__proxy cloud proxy (always returns 403)
 
         Documentation:
@@ -99,6 +113,27 @@ internal sealed class CliOptions
                 case "--no-browser":
                     options.NoBrowser = true;
                     break;
+
+                case "--no-ui":
+                    options.NoUi = true;
+                    break;
+
+                case "--reset":
+                    options.Reset = true;
+                    break;
+
+                case "--ble-name":
+                {
+                    if (!TryTakeValue(args, ref i, "--ble-name", out string prefix, out error)) return false;
+                    if (prefix.Trim().Length == 0)
+                    {
+                        error = "--ble-name requires a non-empty prefix";
+                        return false;
+                    }
+
+                    options.BleNamePrefix = prefix.Trim();
+                    break;
+                }
 
                 case "--port":
                 {
@@ -188,6 +223,10 @@ internal sealed class CliOptions
         }
 
         options.Mode = mode;
+
+        if (Environment.GetEnvironmentVariable("KAWH_NO_UI") == "1")
+            options.NoUi = true;
+
         return true;
     }
 

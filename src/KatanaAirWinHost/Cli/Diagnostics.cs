@@ -17,7 +17,8 @@ internal static class Diagnostics
 {
     public static async Task<int> RunAsync(CliOptions options)
     {
-        ModelProfile model = ModelProfiles.Find(options.ModelId) ?? ModelProfiles.Default;
+        ModelProfile model = ModelProfiles.Find(options.ModelId ?? ModelProfiles.Default.Id) ?? ModelProfiles.Default;
+        model = model with { BleNamePrefix = options.BleNamePrefix ?? model.BleNamePrefix };
         switch (options.Mode)
         {
             case CliOptions.ModeScan:

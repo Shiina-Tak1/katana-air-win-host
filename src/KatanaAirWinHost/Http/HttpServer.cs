@@ -7,9 +7,10 @@ namespace KatanaAirWinHost.Http;
 
 /// <summary>
 /// Minimal HTTP/1.1 server (TcpListener).
-/// Routes: /$$&lt;name&gt;?&lt;args&gt; ($$ protocol), /__debug (status JSON), /__proxy?url= (cloud proxy),
-/// /__host/&lt;file&gt;.js (embedded injection script), anything else (static files; index.html gets
-/// head/tail injected).
+/// Routes: /$$&lt;name&gt;?&lt;args&gt; ($$ protocol), /__status (status page),
+/// /__status.json (status JSON), /__status/reconnect (POST, reconnect request), /__debug
+/// (debug JSON), /__proxy?url= (cloud proxy), /__host/&lt;file&gt;.js (embedded injection script),
+/// anything else (static files; index.html gets head/tail injected).
 /// </summary>
 internal sealed class HttpServer : IDisposable
 {
@@ -28,6 +29,8 @@ internal sealed class HttpServer : IDisposable
     private readonly string _webRootPrefix;
     private readonly Func<string, IReadOnlyList<string>, string> _commandHandler;
     private readonly Func<int, string> _debugProvider;
+    private readonly Func<int, string> _statusJsonProvider;
+    private readonly Action _reconnectRequested;
     private readonly CancellationTokenSource _cts = new();
     private bool _disposed;
 
@@ -37,12 +40,16 @@ internal sealed class HttpServer : IDisposable
         string webRoot,
         int? port,
         Func<string, IReadOnlyList<string>, string> commandHandler,
-        Func<int, string> debugProvider)
+        Func<int, string> debugProvider,
+        Func<int, string> statusJsonProvider,
+        Action reconnectRequested)
     {
         _webRoot = Path.GetFullPath(webRoot);
         _webRootPrefix = _webRoot.TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar;
         _commandHandler = commandHandler;
         _debugProvider = debugProvider;
+        _statusJsonProvider = statusJsonProvider;
+        _reconnectRequested = reconnectRequested;
 
         _listener = new TcpListener(IPAddress.Loopback, port ?? 0);
         _listener.Start();
@@ -86,6 +93,7 @@ internal sealed class HttpServer : IDisposable
                 var parts = head[0].Split(' ');
                 if (parts.Length < 2) return;
 
+                string method = parts[0];
                 string target = parts[1];
                 int qi = target.IndexOf('?');
                 string path = qi >= 0 ? target[..qi] : target;
@@ -94,6 +102,46 @@ internal sealed class HttpServer : IDisposable
                 if (path.StartsWith("/$$", StringComparison.Ordinal))
                 {
                     await ServeCommandAsync(stream, path[1..], query).ConfigureAwait(false);
+                    return;
+                }
+
+                if (path == "/__status")
+                {
+                    if (!IsGet(method))
+                    {
+                        await ServeMethodNotAllowedAsync(stream).ConfigureAwait(false);
+                        return;
+                    }
+
+                    await WriteResponseAsync(stream, 200, "text/html; charset=utf-8",
+                        Encoding.UTF8.GetBytes(StatusPage.Html)).ConfigureAwait(false);
+                    return;
+                }
+
+                if (path == "/__status.json")
+                {
+                    if (!IsGet(method))
+                    {
+                        await ServeMethodNotAllowedAsync(stream).ConfigureAwait(false);
+                        return;
+                    }
+
+                    string statusJson = _statusJsonProvider(Port);
+                    await WriteResponseAsync(stream, 200, "application/json; charset=utf-8",
+                        Encoding.UTF8.GetBytes(statusJson)).ConfigureAwait(false);
+                    return;
+                }
+
+                if (path == "/__status/reconnect")
+                {
+                    if (!string.Equals(method, "POST", StringComparison.OrdinalIgnoreCase))
+                    {
+                        await ServeMethodNotAllowedAsync(stream).ConfigureAwait(false);
+                        return;
+                    }
+
+                    _reconnectRequested();
+                    await WriteResponseAsync(stream, 204, null, Array.Empty<byte>()).ConfigureAwait(false);
                     return;
                 }
 
@@ -127,6 +175,13 @@ internal sealed class HttpServer : IDisposable
     }
 
     // ------------------------------------------------------------------ routes
+
+    private static bool IsGet(string method) =>
+        string.Equals(method, "GET", StringComparison.OrdinalIgnoreCase);
+
+    private static async Task ServeMethodNotAllowedAsync(NetworkStream stream) =>
+        await WriteResponseAsync(stream, 405, "text/plain; charset=utf-8",
+            Encoding.UTF8.GetBytes("method not allowed")).ConfigureAwait(false);
 
     private async Task ServeCommandAsync(NetworkStream stream, string command, string query)
     {

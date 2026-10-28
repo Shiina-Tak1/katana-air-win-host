@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.Text.Json;
 using KatanaAirWinHost.Ble;
+using KatanaAirWinHost.Host;
 using KatanaAirWinHost.Model;
 using Windows.Devices.Bluetooth;
 
@@ -54,9 +55,12 @@ internal sealed class NativeBridge : IDisposable
 
     private BleMidiConnection? _ble;
     private ulong _bleAddress;
+    private bool? _blePaired;
     private string? _lastError;
     private int _scanBurstStarted;
     private int _exitRequested;
+    private int _pairingGuideShown;
+    private int _reconnectPending;
     private bool _midiNotConnectedWarned;
     private bool _disposed;
 
@@ -364,47 +368,132 @@ internal sealed class NativeBridge : IDisposable
 
     private void EnsureConnected()
     {
+        bool pairingRequired;
         lock (_bleGate)
         {
-            if (_ble is not null) return;
+            pairingRequired = ConnectCore();
+        }
 
+        if (pairingRequired) ShowPairingGuideOnce();
+    }
+
+    /// <summary>Opens the BLE link when needed; returns true when Windows pairing is required.</summary>
+    private bool ConnectCore()
+    {
+        if (_ble is not null) return false;
+
+        try
+        {
+            if (_bleAddress == 0) _bleAddress = FindAddress();
+            if (_bleAddress == 0)
+            {
+                _lastError = NotPairedMessage();
+                Console.Error.WriteLine("[ble] no device address; Windows pairing required");
+                _events.Push("midi", "connectfailed", _model.BleDeviceName);
+                return true;
+            }
+
+            var device = BluetoothLEDevice.FromBluetoothAddressAsync(_bleAddress)
+                .AsTask().GetAwaiter().GetResult();
+            if (device is null)
+            {
+                _lastError = "BluetoothLEDevice.FromBluetoothAddressAsync returned null";
+                Console.Error.WriteLine("[ble] FromBluetoothAddressAsync -> null");
+                _events.Push("midi", "connectfailed", _model.BleDeviceName);
+                return false;
+            }
+
+            // Blocking wait on the calling thread; the WinRT continuation stays on this thread.
+            _ble = BleMidiConnection.ConnectAsync(device, device.DeviceId, OnMidiData, true, _model)
+                       .GetAwaiter().GetResult();
+            _blePaired = ReadPaired(device);
+
+            if (_ble.PairingRequired)
+            {
+                _lastError = NotPairedMessage();
+                Console.Error.WriteLine("[ble] connected without notifications; Windows pairing required (0x8065000F)");
+                _events.Push("midi", "connectfailed", _model.BleDeviceName);
+                return true;
+            }
+
+            _lastError = null;
+            Console.Error.WriteLine($"[ble] connected: notify={_ble.NotificationsEnabled}");
+            _events.Push("midi", "changed");
+            return false;
+        }
+        catch (Exception ex)
+        {
+            _ble = null;
+
+            if (IsPairingHResult(ex))
+            {
+                _lastError = NotPairedMessage();
+                Console.Error.WriteLine("[ble] connect failed: Windows pairing required (0x8065000F)");
+                _events.Push("midi", "connectfailed", _model.BleDeviceName);
+                return true;
+            }
+
+            _lastError = ex.Message;
+            Console.Error.WriteLine($"[ble] connect failed: {ex.Message}");
+            _events.Push("midi", "connectfailed", _model.BleDeviceName);
+            return false;
+        }
+    }
+
+    /// <summary>True when the exception or an inner exception is 0x8065000F.</summary>
+    private static bool IsPairingHResult(Exception ex)
+    {
+        for (Exception? current = ex; current is not null; current = current.InnerException)
+            if (current.HResult == PairingGuide.NotPairedHResult) return true;
+
+        return false;
+    }
+
+    /// <summary>Reads the Windows pairing state of the device; false when unavailable.</summary>
+    private static bool ReadPaired(BluetoothLEDevice device)
+    {
+        try
+        {
+            return device.DeviceInformation?.Pairing?.IsPaired ?? false;
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"[ble] pairing state unavailable: {ex.Message}");
+            return false;
+        }
+    }
+
+    private string NotPairedMessage() =>
+        $"{_model.DisplayName} is not paired with Windows. Pair it in Settings > Bluetooth, then press Reconnect.";
+
+    /// <summary>Shows the pairing guide once per process.</summary>
+    private void ShowPairingGuideOnce()
+    {
+        if (Interlocked.Exchange(ref _pairingGuideShown, 1) != 0) return;
+        PairingGuide.Show();
+    }
+
+    /// <summary>Reconnects on a background thread; returns immediately.</summary>
+    public void Reconnect()
+    {
+        if (Interlocked.Exchange(ref _reconnectPending, 1) != 0) return;
+
+        _ = Task.Run(() =>
+        {
             try
             {
-                if (_bleAddress == 0) _bleAddress = FindAddress();
-                if (_bleAddress == 0)
-                {
-                    _lastError = $"no device address (scan found no {_model.DisplayName})";
-                    Console.Error.WriteLine("[ble] no device address (scan found nothing)");
-                    _events.Push("midi", "connectfailed", _model.BleDeviceName);
-                    return;
-                }
-
-                var device = BluetoothLEDevice.FromBluetoothAddressAsync(_bleAddress)
-                    .AsTask().GetAwaiter().GetResult();
-                if (device is null)
-                {
-                    _lastError = "BluetoothLEDevice.FromBluetoothAddressAsync returned null";
-                    Console.Error.WriteLine("[ble] FromBluetoothAddressAsync -> null");
-                    _events.Push("midi", "connectfailed", _model.BleDeviceName);
-                    return;
-                }
-
-                // Blocking wait on the calling thread; the WinRT continuation stays on this thread.
-                _ble = BleMidiConnection.ConnectAsync(device, device.DeviceId, OnMidiData, true, _model)
-                           .GetAwaiter().GetResult();
-
-                _lastError = null;
-                Console.Error.WriteLine($"[ble] connected: notify={_ble.NotificationsEnabled}");
-                _events.Push("midi", "changed");
+                Disconnect();
+                EnsureConnected();
             }
             catch (Exception ex)
             {
-                _lastError = ex.Message;
-                Console.Error.WriteLine($"[ble] connect failed: {ex.Message}");
-                _ble = null;
-                _events.Push("midi", "connectfailed", _model.BleDeviceName);
+                Console.Error.WriteLine($"[ble] reconnect failed: {ex.Message}");
             }
-        }
+            finally
+            {
+                Volatile.Write(ref _reconnectPending, 0);
+            }
+        });
     }
 
     private ulong FindAddress()
@@ -496,6 +585,7 @@ internal sealed class NativeBridge : IDisposable
     {
         lock (_bleGate)
         {
+            _blePaired = null;
             if (_ble is null) return;
             try { _ble.Dispose(); } catch { }
             _ble = null;
@@ -606,22 +696,60 @@ internal sealed class NativeBridge : IDisposable
 
     // ------------------------------------------------------------------ diagnostics
 
-    /// <summary>Returns the /__debug state as JSON.</summary>
+    /// <summary>
+    /// Returns the /__status.json state as JSON. Reads a lock-free snapshot: a reconnect in progress
+    /// does not block the status page.
+    /// </summary>
+    public string StatusJson(int port, string webRoot)
+    {
+        BleMidiConnection? ble = _ble;
+        ulong addressValue = _bleAddress;
+        bool connected = ble is not null;
+        bool notify = ble?.NotificationsEnabled ?? false;
+        bool paired = _blePaired ?? false;
+        string name = ble?.DeviceName ?? "";
+        string address = addressValue != 0 ? addressValue.ToString("X12") : "";
+        string lastError = _lastError ?? "";
+
+        var (version, build) = ReadFrontend(webRoot);
+
+        return JsonSerializer.Serialize(new
+        {
+            webRoot,
+            port,
+            model = _model.Id,
+            frontend = new { version, build },
+            ble = new { connected, name, address, notify, paired, lastError },
+            midi = new
+            {
+                tx = Volatile.Read(ref _midiTxCount),
+                rx = Volatile.Read(ref _midiRxCount),
+            },
+        });
+    }
+
+    /// <summary>Reads frontend version/build; empty strings when unknown.</summary>
+    private static (string Version, string Build) ReadFrontend(string webRoot)
+    {
+        FrontendInfo info = FrontendInfoReader.Read(webRoot);
+        return (info.Version, info.Build);
+    }
+
+    /// <summary>Returns the /__debug state as JSON. Reads a lock-free snapshot.</summary>
     public string DebugJson(int port, string webRoot)
     {
-        bool connected;
-        string address;
-        string name;
-        bool notify;
-        string lastError;
+        BleMidiConnection? ble = _ble;
+        ulong addressValue = _bleAddress;
+        string address = addressValue != 0 ? addressValue.ToString("X12") : "";
+        string name = ble?.DeviceName ?? "";
+        bool connected = ble is not null;
+        bool notify = ble?.NotificationsEnabled ?? false;
+        string lastError = _lastError ?? "";
 
-        lock (_bleGate)
+        int pendingSysex;
+        lock (_sysexGate)
         {
-            connected = _ble is not null;
-            address = _bleAddress != 0 ? _bleAddress.ToString("X12") : "";
-            name = _ble?.DeviceName ?? "";
-            notify = _ble?.NotificationsEnabled ?? false;
-            lastError = _lastError ?? "";
+            pendingSysex = _sysex.Count;
         }
 
         return JsonSerializer.Serialize(new
@@ -635,7 +763,7 @@ internal sealed class NativeBridge : IDisposable
                 tx = Volatile.Read(ref _midiTxCount),
                 rx = Volatile.Read(ref _midiRxCount),
                 sysexTruncated = Volatile.Read(ref _sysexTruncated),
-                pendingSysexBytes = _sysex.Count,
+                pendingSysexBytes = pendingSysex,
             },
             midiTrace = _midiTrace.ToArray(),
             port,

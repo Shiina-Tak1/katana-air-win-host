@@ -19,40 +19,64 @@ internal static class AppHost
 
     public static int Run(CliOptions options)
     {
-        ModelProfile? model = ModelProfiles.Find(options.ModelId);
-        if (model is null)
+        Dialogs.Enabled = !options.NoUi;
+
+        string dataDir = HostConfig.DataDirectory();
+        Directory.CreateDirectory(dataDir);
+
+        if (options.Reset) HostConfig.Reset();
+
+        HostConfig config = HostConfig.Load();
+
+        ModelProfile? profile = ModelProfiles.Find(options.ModelId ?? config.Model ?? ModelProfiles.Default.Id);
+        if (profile is null)
         {
-            Console.Error.WriteLine($"unknown model '{options.ModelId}'");
-            return 2;
+            Dialogs.Error("Katana Air Win Host",
+                $"unknown model '{config.Model}'; available: {string.Join(", ", ModelProfiles.All.Select(p => p.Id))}");
+            return 1;
         }
 
-        string? webRoot = ResolveWebRoot(options.WebRoot);
-        if (webRoot is null) return 1;
+        ModelProfile model = profile with { BleNamePrefix = options.BleNamePrefix ?? profile.BleNamePrefix };
 
-        string dataDir = ResolveDataDir();
-        Directory.CreateDirectory(dataDir);
+        var storage = new StorageStore(dataDir);
+        using var dialogs = new FileDialogBridge(storage);
+
+        string? webRoot = ResolveWebRoot(options, config, dialogs);
+        if (webRoot is null) return 1;
 
         WarnMissingInjectScripts();
 
-        var storage = new StorageStore(dataDir);
         var events = new EventQueue();
-        using var dialogs = new FileDialogBridge(storage);
         var files = new FileBridge(dataDir);
         var appFiles = new AppFileBridge(dialogs, events, files);
         var yt = new YtPlayerBridge(events);
         var btx = new BtxBridge(events);
-        using var bridge = new NativeBridge(files, appFiles, dialogs, yt, btx, events, storage, options.Address, model);
+        using var bridge = new NativeBridge(files, appFiles, dialogs, yt, btx, events, storage,
+            ResolveAddress(options, config), model);
 
         HttpServer server;
         try
         {
-            server = new HttpServer(webRoot, options.Port, bridge.Handle, port => bridge.DebugJson(port, webRoot));
+            server = new HttpServer(
+                webRoot,
+                options.Port,
+                bridge.Handle,
+                port => bridge.DebugJson(port, webRoot),
+                port => bridge.StatusJson(port, webRoot),
+                bridge.Reconnect);
         }
         catch (SocketException ex)
         {
-            Console.Error.WriteLine($"Cannot listen on the local port ({(options.Port is null ? "random" : options.Port.ToString())}): {ex.Message}");
+            string portText = options.Port is null ? "a system-assigned port" : $"port {options.Port}";
+            Console.Error.WriteLine($"Cannot listen on {portText}: {ex.Message}");
             if (options.Port is not null)
                 Console.Error.WriteLine($"Port {options.Port} may already be in use by another process.");
+
+            Dialogs.Error("Katana Air Win Host",
+                $"Cannot listen on {portText}: {ex.Message}" +
+                (options.Port is null
+                    ? ""
+                    : $"{Environment.NewLine}Port {options.Port} may already be in use by another process."));
             return 1;
         }
 
@@ -99,17 +123,19 @@ internal static class AppHost
     // ------------------------------------------------------------------ path resolution
 
     /// <summary>
-    /// Web root: --web-root, then KAWH_WEB_ROOT, then web/index.html up to 8 directories above the
-    /// exe. Returns null when no directory is found.
+    /// Web root precedence: --web-root, KAWH_WEB_ROOT, host.json webRoot, web/index.html up to eight
+    /// directories above the exe, then the first-run folder picker. Errors go to Dialogs and stderr.
     /// </summary>
-    private static string? ResolveWebRoot(string? fromCommandLine)
+    private static string? ResolveWebRoot(CliOptions options, HostConfig config, FileDialogBridge dialogs)
     {
-        if (!string.IsNullOrWhiteSpace(fromCommandLine))
+        if (!string.IsNullOrWhiteSpace(options.WebRoot))
         {
-            string full = Path.GetFullPath(fromCommandLine);
+            string full = Path.GetFullPath(options.WebRoot);
             if (HasIndexHtml(full)) return full;
 
             Console.Error.WriteLine($"--web-root directory does not contain index.html: {full}");
+            Dialogs.Error("Katana Air Win Host",
+                $"--web-root directory does not contain index.html:{Environment.NewLine}{full}");
             return null;
         }
 
@@ -120,9 +146,40 @@ internal static class AppHost
             if (HasIndexHtml(full)) return full;
 
             Console.Error.WriteLine($"KAWH_WEB_ROOT directory does not contain index.html: {full}");
+            Dialogs.Error("Katana Air Win Host",
+                $"KAWH_WEB_ROOT directory does not contain index.html:{Environment.NewLine}{full}");
             return null;
         }
 
+        if (!string.IsNullOrWhiteSpace(config.WebRoot))
+        {
+            string saved = config.WebRoot;
+            if (HasIndexHtml(saved)) return Path.GetFullPath(saved);
+
+            Console.Error.WriteLine($"[host] saved webRoot is not a frontend directory, ignored: {saved}");
+        }
+
+        string? found = FindWebRootAboveExe();
+        if (found is not null) return found;
+
+        if (options.NoUi)
+        {
+            PrintWebRootHelp();
+            Dialogs.Error("Katana Air Win Host",
+                "Frontend resources not found (web/index.html). Start with --web-root <dir> or set KAWH_WEB_ROOT.");
+            return null;
+        }
+
+        string? picked = FirstRun.Prompt(dialogs, config.WebRoot);
+        if (picked is not null) return picked;
+
+        PrintWebRootHelp();
+        Dialogs.Error("Katana Air Win Host", "Frontend resources not found (web/index.html); folder selection was canceled.");
+        return null;
+    }
+
+    private static string? FindWebRootAboveExe()
+    {
         var dir = new DirectoryInfo(AppContext.BaseDirectory);
         for (int depth = 0; depth < WebSearchDepth && dir is not null; depth++, dir = dir.Parent)
         {
@@ -130,24 +187,42 @@ internal static class AppHost
             if (HasIndexHtml(candidate)) return candidate;
         }
 
+        return null;
+    }
+
+    private static void PrintWebRootHelp()
+    {
         Console.Error.WriteLine("Frontend resources not found (web/index.html).");
-        Console.Error.WriteLine("  Search order: --web-root -> KAWH_WEB_ROOT -> web/index.html up to 8 levels above the exe directory");
+        Console.Error.WriteLine("  Search order: --web-root -> KAWH_WEB_ROOT -> host.json webRoot -> web/index.html up to 8 levels above the exe directory");
         Console.Error.WriteLine($"  Start point: {AppContext.BaseDirectory}");
         Console.Error.WriteLine("See README.md for frontend resource setup, or use --web-root <dir>.");
-        return null;
     }
 
     private static bool HasIndexHtml(string directory) =>
         Directory.Exists(directory) && File.Exists(Path.Combine(directory, "index.html"));
 
-    /// <summary>Data directory: KAWH_DATA_DIR or exe directory\data.</summary>
-    private static string ResolveDataDir()
+    /// <summary>
+    /// Device address precedence: --addr, host.json deviceAddress, then storage.json ble.address
+    /// (resolved by NativeBridge). An invalid saved address is ignored.
+    /// </summary>
+    private static string? ResolveAddress(CliOptions options, HostConfig config)
     {
-        string? fromEnvironment = Environment.GetEnvironmentVariable("KAWH_DATA_DIR");
-        if (!string.IsNullOrWhiteSpace(fromEnvironment))
-            return Path.GetFullPath(fromEnvironment);
+        if (!string.IsNullOrWhiteSpace(options.Address)) return options.Address;
 
-        return Path.Combine(AppContext.BaseDirectory, "data");
+        string? saved = config.DeviceAddress;
+        if (string.IsNullOrWhiteSpace(saved)) return null;
+
+        string address = saved.Trim();
+        if (address.StartsWith("0x", StringComparison.OrdinalIgnoreCase))
+            address = address[2..];
+
+        if (address.Length == 0 || address.Length > 16 || !address.All(Uri.IsHexDigit))
+        {
+            Console.Error.WriteLine($"[host] invalid saved deviceAddress ignored: {saved}");
+            return null;
+        }
+
+        return address.ToUpperInvariant();
     }
 
     private static void WarnMissingInjectScripts()
@@ -165,6 +240,7 @@ internal static class AppHost
     {
         Console.WriteLine($"KatanaAirWinHost - Windows host for {model.FrontendName}");
         Console.WriteLine($"  Open  : http://localhost:{port}/");
+        Console.WriteLine($"  Status: http://localhost:{port}/__status   (state page)");
         Console.WriteLine($"  Debug : http://localhost:{port}/__debug   (commands / events / BLE status)");
         Console.WriteLine($"  Web   : {webRoot}");
         Console.WriteLine($"  Data  : {dataDir}");

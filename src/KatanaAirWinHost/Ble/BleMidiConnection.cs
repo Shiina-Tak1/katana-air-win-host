@@ -1,6 +1,7 @@
 using Windows.Devices.Bluetooth;
 using Windows.Devices.Bluetooth.GenericAttributeProfile;
 using Windows.Storage.Streams;
+using KatanaAirWinHost.Host;
 using KatanaAirWinHost.Model;
 
 namespace KatanaAirWinHost.Ble;
@@ -16,6 +17,7 @@ internal sealed class BleMidiConnection : IDisposable
     private readonly GattCharacteristic _characteristic;
     private readonly GattSession? _session;
     private readonly Action<byte[]> _onData;
+    private readonly bool _pairingRequired;
 
     /// <summary>Persists SysEx state across notifications.</summary>
     private readonly BleMidiUnframer _unframer = new();
@@ -23,7 +25,10 @@ internal sealed class BleMidiConnection : IDisposable
     public string DeviceName { get; }
     public bool NotificationsEnabled { get; }
 
-    private BleMidiConnection(BluetoothLEDevice device, GattCharacteristic ch, string name, Action<byte[]> onData, bool notify, GattSession? session)
+    /// <summary>True when a 0x8065000F indicates the device is not paired with Windows.</summary>
+    public bool PairingRequired => _pairingRequired;
+
+    private BleMidiConnection(BluetoothLEDevice device, GattCharacteristic ch, string name, Action<byte[]> onData, bool notify, GattSession? session, bool pairingRequired)
     {
         _device = device;
         _characteristic = ch;
@@ -31,6 +36,7 @@ internal sealed class BleMidiConnection : IDisposable
         DeviceName = name;
         _onData = onData;
         NotificationsEnabled = notify;
+        _pairingRequired = pairingRequired;
         _characteristic.ValueChanged += OnValueChanged;
     }
 
@@ -46,6 +52,8 @@ internal sealed class BleMidiConnection : IDisposable
         GattDeviceServicesResult? services = null;
         BluetoothLEDevice current = device;
         string name = device.Name ?? "";
+        bool pairingRequired = false;
+        Exception? lastError = null;
 
         GattSession? session = null;
         try
@@ -72,6 +80,8 @@ internal sealed class BleMidiConnection : IDisposable
             }
             catch (Exception ex)
             {
+                lastError = ex;
+                if (ex.HResult == PairingGuide.NotPairedHResult) pairingRequired = true;
                 Console.Error.WriteLine($"[ble] attempt {attempt} threw 0x{ex.HResult:X8}: {ex.Message}");
             }
 
@@ -93,7 +103,7 @@ internal sealed class BleMidiConnection : IDisposable
         }
 
         if (services is null || services.Status != GattCommunicationStatus.Success)
-            throw new InvalidOperationException($"GATT services failed: {services?.Status}");
+            throw new InvalidOperationException($"GATT services failed: {services?.Status}", lastError);
 
         var service = services.Services.FirstOrDefault(s => s.Uuid == model.MidiServiceUuid)
                       ?? throw new InvalidOperationException("BLE-MIDI service not found");
@@ -141,7 +151,7 @@ internal sealed class BleMidiConnection : IDisposable
         }
 
         if (chars is null || chars.Status != GattCommunicationStatus.Success)
-            throw new InvalidOperationException($"GATT characteristics failed: {chars?.Status}");
+            throw new InvalidOperationException($"GATT characteristics failed: {chars?.Status}", lastError);
 
         var ch = chars.Characteristics.FirstOrDefault(c => c.Uuid == model.MidiCharacteristicUuid)
                  ?? throw new InvalidOperationException("BLE-MIDI characteristic not found");
@@ -156,10 +166,11 @@ internal sealed class BleMidiConnection : IDisposable
         }
         catch (Exception ex)
         {
+            if (ex.HResult == PairingGuide.NotPairedHResult) pairingRequired = true;
             Console.Error.WriteLine($"[ble] notify enable threw: 0x{ex.HResult:X8} {ex.Message}");
         }
 
-        return new BleMidiConnection(current, ch, name, onData, notify, session);
+        return new BleMidiConnection(current, ch, name, onData, notify, session, pairingRequired);
     }
 
     private void OnValueChanged(GattCharacteristic sender, GattValueChangedEventArgs args)

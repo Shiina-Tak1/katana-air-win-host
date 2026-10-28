@@ -2,6 +2,8 @@ using System.Text;
 using KatanaAirWinHost.Cli;
 using KatanaAirWinHost.Host;
 
+ConsoleHost.Attach();
+
 // UTF-8 console output; the default code page is GBK on Chinese Windows.
 // Throws when output is redirected and there is no console handle.
 try
@@ -13,23 +15,31 @@ catch (Exception)
     // No console handle.
 }
 
-if (!CliOptions.TryParse(args, out var options, out var parseError))
+try
 {
-    Console.Error.WriteLine(parseError);
-    Console.Error.WriteLine();
-    Console.Error.WriteLine(CliOptions.HelpText);
-    return 2;
+    if (!CliOptions.TryParse(args, out var options, out var parseError))
+    {
+        Console.Error.WriteLine(parseError);
+        Console.Error.WriteLine();
+        Console.Error.WriteLine(CliOptions.HelpText);
+        return 2;
+    }
+
+    switch (options.Mode)
+    {
+        case CliOptions.ModeHelp:
+            Console.WriteLine(CliOptions.HelpText);
+            return 0;
+
+        case CliOptions.ModeApp:
+            return AppHost.Run(options);
+
+        default:
+            return await Diagnostics.RunAsync(options);
+    }
 }
-
-switch (options.Mode)
+catch (Exception ex)
 {
-    case CliOptions.ModeHelp:
-        Console.WriteLine(CliOptions.HelpText);
-        return 0;
-
-    case CliOptions.ModeApp:
-        return AppHost.Run(options);
-
-    default:
-        return await Diagnostics.RunAsync(options);
+    Dialogs.Error("Katana Air Win Host", $"{ex.GetType().Name}: {ex.Message}");
+    return 1;
 }
