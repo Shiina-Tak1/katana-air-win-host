@@ -4,6 +4,7 @@
 | ------------------ | ----------------------------------------------------------- |
 | Product            | Katana Air Win Host                                         |
 | Executable         | `KatanaAirWinHost.exe`                                      |
+| Subsystem          | WinExe; no console window, attached to the parent console when started from a terminal |
 | Frontend           | BOSS TONE STUDIO for KATANA-AIR, version 2.1.0 (see README) |
 | Frontend package   | `jp.co.roland.boss_katana_air_editor`                       |
 | Frontend resources | Supplied locally; not part of this repository               |
@@ -12,14 +13,15 @@
 
 | Interface                         | Size                                      | Defined in                                            |
 | --------------------------------- | ----------------------------------------- | ----------------------------------------------------- |
-| HTTP route classes                | 5                                         | `Http/HttpServer.cs`                                  |
+| HTTP route classes                | 8                                         | `Http/HttpServer.cs`                                  |
 | `$$` names in `SupportedCommands` | 55 (50 fixed names + 5 `$$btx_*`)         | `Bridge/NativeBridge.cs`                              |
 | Prefix-forwarded command families | 2 (`$$ytplayer_*`, `$$btx_*`)             | `Bridge/YtPlayerBridge.cs`, `Bridge/BtxBridge.cs`     |
 | Event names                       | 16                                        | §4                                                    |
-| Command-line options              | 12                                        | `Cli/CliOptions.cs`                                   |
-| Environment variables             | 3                                         | `Host/AppHost.cs`, `Bridge/CloudProxy.cs`             |
+| Command-line options              | 15                                        | `Cli/CliOptions.cs`                                   |
+| Environment variables             | 4                                         | `Host/AppHost.cs`, `Bridge/CloudProxy.cs`             |
 | Exit codes                        | 0, 1, 2                                   | `Program.cs`, `Host/AppHost.cs`, `Cli/Diagnostics.cs` |
 | Storage keys written by the host  | 3 (`""`, `ble.address`, `dialog.lastdir`) | `Bridge/StorageStore.cs`                              |
+| Startup settings                  | `data\host.json` (`webRoot`, `deviceAddress`, `model`) | `Host/HostConfig.cs` |
 
 ## 2. HTTP interface
 
@@ -29,18 +31,22 @@
 | ---------------------- | -------------------------------------------------------------------------------------------------------------------------------- |
 | Listener               | `TcpListener` on `IPAddress.Loopback`                                                                                            |
 | Port                   | `--port <n>`, otherwise a system-assigned port                                                                                   |
-| Protocol               | HTTP/1.1 subset: request head, one response, `Connection: close`; the request method and body are not inspected, only the target |
+| Protocol               | HTTP/1.1 subset: request head, one response, `Connection: close`; the request method is inspected only for the `/__status*` routes; no request body is read |
 | Request head limit     | 16 KiB initial buffer, doubled on demand, 8 MiB hard limit; over the limit the connection is closed without a response           |
 | Timeouts               | 10 s receive, 10 s send                                                                                                          |
 | Response headers       | `Content-Type`, `Content-Length`, `Cache-Control: no-store`, `Access-Control-Allow-Origin: *`, `Connection: close`               |
 | `$$` handler exception | Response `v`; one `[cmd] <name>: <message>` line on stderr                                                                       |
 | Process model          | One process: HTTP server, `$$` dispatch, BLE link                                                                                |
+| Process lifetime       | Exits when the launched Edge window closes, on `$$app_exit`, or on `Ctrl+C`; `--no-browser` keeps it running until `Ctrl+C`     |
 
 ### 2.2 Route table
 
 | Route                                | Response                                                        | Notes                                                                                                                                              |
 | ------------------------------------ | --------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `/$$<name>[?<arg1>[,<arg2>]]`        | `text/plain; charset=utf-8`, body = encoded return value (§3.2) | Any target starting with `/$$`; the leading `/` is stripped; the handler receives `$$<name>`                                                       |
+| `/__status`                          | `text/html; charset=utf-8` status page                          | `GET` only; 405 otherwise; §6.4                                                                                                                     |
+| `/__status.json`                     | `application/json; charset=utf-8` state snapshot                | `GET` only; 405 otherwise; §6.4                                                                                                                     |
+| `/__status/reconnect`                | `204 No Content`                                                | `POST` only; 405 otherwise; starts a background reconnect                                                                                           |
 | `/__debug`                           | `application/json; charset=utf-8` state snapshot                | §6.1                                                                                                                                               |
 | `/__proxy?url=<percent-encoded URL>` | Upstream status, `Content-Type`, body                           | Whitelisted hosts only; §2.4                                                                                                                       |
 | `/__host/<file>`                     | `text/javascript; charset=utf-8`, embedded script               | 404 `inject resource not found`; names restricted to ASCII letters, digits, `.`, `_`, `-`; no `..`; set fixed at build time from `Web/inject/*.js` |
@@ -232,6 +238,9 @@ GET http://localhost:<port>/$$<name>?<arg1>,<arg2>
 | *(none)*             | Start the server and open the interface in an Edge application window                                                                           |
 | `--dev`              | Open a normal Edge window (address bar, DevTools) instead of an application window                                                              |
 | `--no-browser`       | Start the server only; no browser is launched and `$$app_exit` has no window to close                                                           |
+| `--no-ui`            | No message boxes; startup errors go to stderr; the first-run picker is skipped                                                                  |
+| `--reset`            | Delete `data\host.json` before startup                                                                                                          |
+| `--ble-name <prefix>` | BLE name prefix used for discovery; overrides the model profile                                                                                 |
 | `--port <n>`         | Fixed listen port, 1–65535; default is a system-assigned free port                                                                              |
 | `--web-root <dir>`   | Frontend directory; must contain `index.html` directly                                                                                          |
 | `--model <id>`       | Model profile: `katana-air` (default) or `katana-air-ex`                                                                                        |
@@ -251,16 +260,18 @@ GET http://localhost:<port>/$$<name>?<arg1>,<arg2>
 | `--port` value                                | Integer 1–65535                                                                                                                                                                 |
 | `--web-root` value                            | Non-empty                                                                                                                                                                       |
 | `--model` value                               | `katana-air`, `katana-air-ex`                                                                                                                                                   |
-| Frontend directory resolution                 | `--web-root`, `KAWH_WEB_ROOT`, then the first directory within eight levels above the executable that contains `web/index.html`; the directory must contain `index.html` itself |
-| Startup output                                | Interface URL, `/__debug` URL, frontend directory, data directory, WinMM input ports                                                                                            |
+| `--ble-name` value                            | Non-empty                                                                                                                                                                       |
+| Frontend directory resolution                 | `--web-root`, `KAWH_WEB_ROOT`, `host.json` `webRoot`, then the first directory within eight levels above the executable that contains `web/index.html`, then the first-run folder picker (skipped with `--no-ui`); a directory is accepted when it contains `index.html` |
+| Startup output                                | Interface URL, `/__status` URL, `/__debug` URL, frontend directory, data directory, WinMM input ports                                                                           |
 | Unknown option, extra argument, missing value | Parse error                                                                                                                                                                     |
 
 ### 5.2 Environment variables
 
 | Variable         | Effect                                                          |
 | ---------------- | --------------------------------------------------------------- |
-| `KAWH_WEB_ROOT`  | Frontend directory; below `--web-root`, above the upward search |
+| `KAWH_WEB_ROOT`  | Frontend directory; below `--web-root`, above `host.json`        |
 | `KAWH_DATA_DIR`  | Data directory; default `<exe directory>\data`                  |
+| `KAWH_NO_UI`     | `1` sets `--no-ui`                                              |
 | `KAWH_PROXY_OFF` | `1` disables `/__proxy`; every request returns 403              |
 
 ### 5.3 Exit codes
@@ -268,8 +279,8 @@ GET http://localhost:<port>/$$<name>?<arg1>,<arg2>
 | Code | Situations                                                                                                                                                                                                                                        |
 | ---- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | 0    | `--help`; normal shutdown (Ctrl+C or `$$app_exit`); a diagnostic command that completed successfully                                                                                                                                              |
-| 1    | Frontend directory not found, or it has no `index.html`; listen port unavailable; `--ble-scan` when the device cannot be opened; `--ble-pair` when every attempt failed. The reason is printed to stderr                                          |
-| 2    | Command-line parse error, including unknown model (message and help text go to stderr); `--ble-scan` when no device of the selected model was found; `--ble-pair` when no device was found, it could not be opened, or no pairing information is available; unknown diagnostic mode |
+| 1    | Frontend directory not found, or it has no `index.html`; the first-run picker canceled or skipped (`--no-ui`); an unusable saved `host.json` value (unknown model, invalid saved address is only warned and ignored); listen port unavailable; `--ble-scan` when the device cannot be opened; `--ble-pair` when every attempt failed. The reason is printed to stderr |
+| 2    | Command-line parse error, including unknown model and an empty `--ble-name` (message and help text go to stderr); `--ble-scan` when no device of the selected model was found; `--ble-pair` when no device was found, it could not be opened, or no pairing information is available; unknown diagnostic mode |
 
 ## 6. Diagnostics
 
@@ -302,6 +313,19 @@ GET http://localhost:<port>/$$<name>?<arg1>,<arg2>
 | `--list-midi`       | WinMM input and output ports with indices; Bluetooth LE devices are not listed                                                                                                                                                                                              |
 | `--list-winrt-midi` | WinRT MIDI endpoints. Enumerating WinRT MIDI can hand the amplifier to the Windows Bluetooth MIDI stack; direct GATT access then reports `Unreachable`. The command prints this warning. The host never enumerates WinRT MIDI on startup                                    |
 
+### 6.4 `GET /__status` and `GET /__status.json`
+
+| Field | Content |
+| ----- | ------- |
+| `webRoot`, `port`, `model` | Resolved frontend directory; listening port; model profile id |
+| `frontend.version`, `frontend.build` | From `js\config\product_setting.js`; empty when unreadable |
+| `ble.connected`, `ble.name`, `ble.address`, `ble.notify` | Link state; address is 12-digit uppercase hex |
+| `ble.paired` | Windows pairing state; false when disconnected or unavailable |
+| `ble.lastError` | Last recorded BLE error |
+| `midi.tx`, `midi.rx` | Frames sent; complete MIDI messages received |
+
+The page refreshes from `/__status.json` every 2 seconds. **Reconnect** posts `/__status/reconnect` and starts a background reconnect; **Copy diagnostics** copies the JSON text. `/__debug` additionally exposes the command log, events, SysEx counters and MIDI trace.
+
 ## 7. BLE-MIDI transport
 
 ### 7.1 Service and characteristic
@@ -314,7 +338,8 @@ GET http://localhost:<port>/$$<name>?<arg1>,<arg2>
 | MIDI characteristic (write + notify) | `7772E5DB-3868-4112-A1A9-F2669D106BF3` |
 
 Model profiles: `katana-air` (default) and `katana-air-ex`. The KATANA-AIR EX profile reuses the
-KATANA-AIR values; it has not been verified on KATANA-AIR EX hardware.
+KATANA-AIR values; it has not been verified on KATANA-AIR EX hardware. `--ble-name <prefix>`
+overrides the discovery prefix for either profile.
 
 ### 7.2 Frame layout and timestamps
 
@@ -381,16 +406,17 @@ KATANA-AIR values; it has not been verified on KATANA-AIR EX hardware.
 | Priority | Source                                                                              | Written back         |
 | -------- | ----------------------------------------------------------------------------------- | -------------------- |
 | 1        | `--addr`                                                                            | No                   |
-| 2        | `storage.json` → `ble.address`                                                      | —                    |
-| 3        | Advertisement scan (active, 5 s, first local name starting with `KATANA-AIR`)       | Yes, as 12-digit hex |
-| 4        | Paired-device enumeration (first paired device whose name starts with `KATANA-AIR`) | Yes, as 12-digit hex |
+| 2        | `host.json` → `deviceAddress`                                                       | No                   |
+| 3        | `storage.json` → `ble.address`                                                      | —                    |
+| 4        | Advertisement scan (active, 5 s, first local name starting with the discovery prefix) | Yes, as 12-digit hex |
+| 5        | Paired-device enumeration (first paired device whose name starts with the prefix)    | Yes, as 12-digit hex |
 
 | Condition                                 | Behaviour                                                                        |
 | ----------------------------------------- | -------------------------------------------------------------------------------- |
-| Amplifier already paired, not advertising | Priority 4 applies                                                               |
-| No address found                          | Pushes `midi.connectfailed`; logs `[ble] no device address (scan found nothing)` |
+| Amplifier already paired, not advertising | Priority 5 applies                                                               |
+| No address found                          | Pushes `midi.connectfailed`; sets the pairing message; shows the pairing guide once |
 
-## 8. Data directory and `storage.json`
+## 8. Data directory, `storage.json` and `host.json`
 
 | Item                       | Value                                                                                                  |
 | -------------------------- | ------------------------------------------------------------------------------------------------------ |
@@ -399,8 +425,11 @@ KATANA-AIR values; it has not been verified on KATANA-AIR EX hardware.
 | Missing or unreadable file | Treated as an empty store (read failures are logged)                                                   |
 | Deleting a key             | A write with an empty value removes it                                                                 |
 | Subdirectories             | `temporary\` and `documents\` are created on demand by `$$fs_path`                                     |
-| `ble.address` source       | `--addr` if given, otherwise `storage.json`                                                            |
+| `ble.address` source       | `--addr` if given, otherwise `host.json` `deviceAddress`, otherwise `storage.json`                     |
 | `--addr` persistence       | Not written to `storage.json`                                                                          |
+| Startup settings file      | `<data>\host.json`, JSON object with `webRoot`, `deviceAddress`, `model`; written by the first-run picker |
+| `host.json` precedence     | `--web-root` > `KAWH_WEB_ROOT` > `webRoot`; `--addr` > `deviceAddress`; `--model` > `model` > `katana-air` |
+| `--reset`                  | Deletes `host.json` before startup; a missing file is ignored                                          |
 
 | Key              | Written by       | Content                                                              |
 | ---------------- | ---------------- | -------------------------------------------------------------------- |

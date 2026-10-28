@@ -22,7 +22,7 @@ Katana Air Win Host runs the BOSS KATANA-AIR controller frontend from the offici
 3. **Bluetooth MIDI transport** — a direct Bluetooth LE GATT connection to the amplifier.
 
 ```text
-Controller UI (Edge app window)
+Controller UI (browser window)
     ↕
 Injected scripts + $$ native bridge
     ↕
@@ -42,20 +42,20 @@ The host injects `head.js` and `tail.js` into the HTML served to the browser. Th
 - A BOSS KATANA-AIR amplifier.
 - The controller frontend resources from the official Android application.
 - The .NET 10 SDK to build, or the .NET 10 Runtime for a framework-dependent build.
-- Microsoft Edge.
 
 ## Official Frontend Resources
 
 The controller frontend is not included in this repository; it is the web frontend located under assets/html. The host has been tested with the frontend from BOSS TONE STUDIO for KATANA-AIR for Android, version 2.1.0 (build 74; [third-party XAPK reference](https://apkpure.net/bts-for-katana-air/jp.co.roland.boss_katana_air_editor)).
 
-Place the complete tree at `web/` in the repository root or next to the executable, or pass `--web-root` / set `KAWH_WEB_ROOT`. Other frontend versions work only if the `$$` command set and event encoding are unchanged. Users are responsible for compliance with the applicable terms and licenses.
+Place the frontend in web/ beside the executable or repository root, or specify its location via --web-root, KAWH_WEB_ROOT, or the first-run folder picker.
+
+Other frontend versions may work if the $$ command set and event encoding remain compatible. Users are responsible for license compliance.
 
 ## Getting Started
 
-1. Place the frontend resources under `web/`.
-2. Build the host or use a published build.
-3. Pair the amplifier: power it on, hold its Bluetooth button until the indicator flashes rapidly, add **KATANA-AIR MIDI** in Windows **Settings → Bluetooth & devices**, and close the official application on any phone (the amplifier accepts only one BLE MIDI connection at a time).
-4. Start the host and wait for the editor to load with parameter values instead of `--`.
+1. Build the host or use a published build.
+2. Pair the amplifier: power it on, hold its Bluetooth button until the indicator flashes rapidly, add **KATANA-AIR MIDI** in Windows **Settings → Bluetooth & devices**, and close the official application on any phone (the amplifier accepts only one BLE MIDI connection at a time).
+3. Wait for the editor to load with parameter values instead of `--`.
 
 ### Build
 
@@ -77,11 +77,11 @@ The publish directory does not contain `web/`; copy the frontend resources next 
 .\src\KatanaAirWinHost\bin\Release\net10.0-windows10.0.19041.0\KatanaAirWinHost.exe
 ```
 
-The host starts a local HTTP server, prints its URL, and opens the interface in an Edge application window. Close it with **Exit** or `Ctrl+C`.
+The host starts a local HTTP server and opens the interface in an Edge application window (the default browser when Edge is not installed). The host exits when that window closes, when **Exit** is clicked, or on `Ctrl+C`. The status page is at `/__status`; `/__debug` exposes the command, event, and BLE state.
 
 | Option             | Effect                                     |
 | ------------------ | ------------------------------------------ |
-| `--dev`            | Open a normal Edge window with DevTools    |
+| `--dev`            | Open a normal browser window with DevTools |
 | `--no-browser`     | Start the server without a browser         |
 | `--web-root <dir>` | Use the specified frontend directory       |
 | `--addr <HEX12>`   | Use a known Bluetooth address for this run |
